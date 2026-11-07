@@ -36,8 +36,8 @@ A containerised data pipeline that pulls stock quotes from a REST API, streams t
 **Prerequisites:** Docker Desktop, and a RapidAPI key subscribed to the Alpha Vantage API.
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/market-pulse-analytics.git
-cd market-pulse-analytics
+git clone https://github.com/Nikken-Ocansey/Market_Pulse_Analytics.git
+cd Market_Pulse_Analytics
 
 cp .env.example .env        # on Windows PowerShell: copy .env.example .env
 # edit .env and set API_KEY to your RapidAPI key
