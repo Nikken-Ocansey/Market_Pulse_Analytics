@@ -1,0 +1,171 @@
+
+services:
+
+  # ---------------------------------------------------------------
+  # 1. KAFKA (KRaft mode, no Zookeeper) + Kafka UI
+  # ---------------------------------------------------------------
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: kafka
+    hostname: kafka
+    ports:
+      - "9092:9092"   # client access from host apps
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENERS: PLAINTEXT://kafka:29092,CONTROLLER://kafka:29093,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "kafka:29092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    networks:
+      - pipeline-net
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      DYNAMIC_CONFIG_ENABLED: "true"
+    networks:
+      - pipeline-net
+
+  # ---------------------------------------------------------------
+  # 2. PYTHON PRODUCER — pulls from an API, pushes to Kafka
+  # ---------------------------------------------------------------
+  producer:
+    build: ./producer
+    container_name: producer
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_TOPIC: raw_api_data
+      API_URL: "https://alpha-vantage.p.rapidapi.com/query"   
+      POLL_INTERVAL_SECONDS: "60"
+      RAPIDAPI_KEY: ${API_KEY}
+      MAX_REQUESTS_PER_DAY: "4"
+      STATE_FILE: "/data/quota.json"
+
+    volumes:
+      - producer_state:/data
+    networks:
+      - pipeline-net
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------
+  # 3. SPARK — master + 1 worker, plus a job runner
+  # ---------------------------------------------------------------
+  spark-master:
+    image: bde2020/spark-master:3.3.0-hadoop3.3
+    container_name: spark-master
+    ports:
+      - "9090:8080"   # Spark master web UI (8080 is taken by kafka-ui, so remapped)
+      - "7077:7077"   # Spark master port
+    networks:
+      - pipeline-net
+
+  spark-worker:
+    image: bde2020/spark-worker:3.3.0-hadoop3.3
+    container_name: spark-worker
+    depends_on:
+      - spark-master
+    environment:
+      SPARK_MASTER: spark://spark-master:7077
+      SPARK_WORKER_MEMORY: 2G
+      SPARK_WORKER_CORES: 2
+    ports:
+      - "8081:8081"   # Spark worker web UI
+    networks:
+      - pipeline-net
+
+  spark-submit:
+    image: bde2020/spark-master:3.3.0-hadoop3.3
+    container_name: spark-submit
+    depends_on:
+      - spark-master
+      - spark-worker
+      - kafka
+      - postgres
+    volumes:
+      - ./spark:/opt/spark-jobs
+      - spark_checkpoint:/opt/spark-checkpoint
+    working_dir: /opt/spark-jobs
+    command: >
+      /spark/bin/spark-submit
+      --master spark://spark-master:7077
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.0,org.postgresql:postgresql:42.7.3
+      /opt/spark-jobs/streaming_job.py
+    networks:
+      - pipeline-net
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------
+  # 4. POSTGRES — final storage, Power BI connects here from the host
+  # ---------------------------------------------------------------
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    environment:
+      POSTGRES_DB: pipeline_db
+      POSTGRES_USER: pipeline_user
+      POSTGRES_PASSWORD: pipeline_pass
+    ports:
+      - "5433:5432"   # exposed so Power BI (running on your host) can connect
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pipeline_user -d pipeline_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pipeline-net
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGADMIN_DEFAULT_EMAIL: nikkenocansey1988@gmail.com
+      PGADMIN_DEFAULT_PASSWORD: just_me100$
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - pipeline-net    
+
+volumes:
+  kafka_data:
+  postgres_data:
+  spark_checkpoint:
+  producer_state:
+  pgadmin_data:
+
+networks:
+  pipeline-net:
+    driver: bridge
