@@ -1,14 +1,19 @@
 # Market Pulse Analytics
 
+## COMPANY OVERVIEW
+
+MarketPulse faces increasing demand for more advanced insights, particularly around predictive stock movements and real-time trading signals. The current data pipeline struggles to meet the growing data volume and the need for ultra-low latency. These issues are particularly noticeable during peak market periods, such as stock market opens and earnings reports, when the system is unable to process data fast enough to meet the needs of high-frequency traders and asset managers.
+
+## Pipeline Overview
 A containerised data pipeline that pulls stock quotes from a REST API, streams them through Kafka, cleans them with Spark Structured Streaming, stores them in PostgreSQL, and visualises them in Power BI.
 
 ![Architecture](docs/architecture.png)
 
 ## How it works
 
-1. **Extract:** a Python producer calls the Alpha Vantage `GLOBAL_QUOTE` endpoint (via RapidAPI) for MSFT and AMZN and publishes each response as JSON to the Kafka topic `raw_api_data`.
-2. **Transform:** a Spark Structured Streaming job reads the topic, parses the nested JSON, casts types, strips the `%` from the change percentage, drops rows with missing key fields, and removes duplicates.
-3. **Load:** each micro-batch is written to the `stock_quotes` table in PostgreSQL.
+1. **Extract:** A Python producer calls the Alpha Vantage `GLOBAL_QUOTE` endpoint (via RapidAPI) for MSFT and AMZN and publishes each response as JSON to the Kafka topic `raw_api_data`.
+2. **Transform:** A Spark Structured Streaming job reads the topic, parses the nested JSON, casts types, strips the `%` from the change percentage, drops rows with missing key fields, and removes duplicates.
+3. **Load:** Each micro-batch is written to the `stock_quotes` table in PostgreSQL.
 4. **Visualise:** Power BI connects to PostgreSQL (Import mode) for the dashboard.
 
 ![Dashboard](docs/dashboard.png)
@@ -68,14 +73,15 @@ Get Data → PostgreSQL database → server `localhost:5433`, database `pipeline
 docker exec -it postgres psql -U pipeline_user -d pipeline_db -c "SELECT * FROM stock_quotes ORDER BY ingestion_time DESC;"
 ```
 
+## Project Outcomes
+
+- Scalable pipeline which meets increasing volume of data.
+- Minimized data processing delays.
+- Delivering insights on Power BI which enable clients to make data-driven trading decisions.
+  
 ## Limitations
 
 - The API returns the latest end-of-day quote, so this is a daily-snapshot pipeline, not real-time market data. The request quota limits it to a couple of symbols.
-- Credentials in `docker-compose.yml` and the Spark job are local-development defaults. Change them before using anything like this outside your own machine.
+- Credentials in `docker-compose.yml` and the Spark job are local-development defaults. 
 - Power BI uses Import mode, so the report needs a manual refresh to show new rows.
 
-## Possible improvements
-
-- Fetch on a fixed schedule after the US market close and skip weekends.
-- Replace the plain JDBC append with an `INSERT ... ON CONFLICT DO NOTHING` upsert.
-- Move credentials into environment variables.
